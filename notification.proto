@@ -1,0 +1,48 @@
+syntax = "proto3";
+
+package notification;
+
+option go_package = "anora/proto";
+
+// NotificationService handles connection management and notification streaming
+service NotificationService {
+  // AddConnection registers a new connection to receive notifications
+  rpc AddConnection(ConnectionRequest) returns (ConnectionResponse);
+  
+  // RemoveConnection unregisters a connection
+  rpc RemoveConnection(ConnectionRequest) returns (ConnectionResponse);
+  
+  // StreamNotifications is a server-side streaming RPC to push notifications to clients
+  rpc StreamNotifications(SubscribeRequest) returns (stream Notification);
+}
+
+// ConnectionRequest contains connection details
+message ConnectionRequest {
+  string connection_id = 1;
+  string service_name = 2;
+}
+
+// ConnectionResponse confirms the connection operation
+message ConnectionResponse {
+  bool success = 1;
+  string message = 2;
+  string connection_id = 3;
+}
+
+// SubscribeRequest to subscribe for notifications
+message SubscribeRequest {
+  string connection_id = 1;
+}
+
+// Notification message structure
+message Notification {
+  string id = 1;
+  string connection_id = 2;
+  string created_at = 3;
+  string updated_at = 4;
+  string client_id = 5;
+  string call_id = 6;
+  string service_name = 7;
+  int64 timestamp = 8;
+  string type = 9; // "notification" or "heartbeat"
+}
