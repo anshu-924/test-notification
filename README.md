@@ -1,155 +1,64 @@
-# Notification Client - React gRPC-Web App
+# test-notification
 
-A simple React application that connects to a gRPC notification service and displays received notifications and heartbeats.
+Local dummy dashboard to exercise Anora. React + Vite + gRPC-Web. Flow: **login (phone+OTP) → auto-connect over gRPC → live notification/heartbeat log → availability toggle**. No auto-connect before login.
 
-## Prerequisites
-
-- Node.js (v14 or higher)
-- npm or yarn
-- Protocol Buffers compiler (`protoc`)
-- `protoc-gen-grpc-web` plugin
-- Docker (for Envoy proxy)
-- Your gRPC server running on localhost:50051
-
-## Installation
-
-### 1. Install Node Dependencies
+## Run
 
 ```bash
+# 1) start Anora locally (from anora/Anora)
+docker compose -f docker-compose.test.yaml up -d --build
+
+# 2) start the dashboard
 npm install
+npm run dev            # http://localhost:3000
 ```
 
-### 2. Install Protocol Buffers Compiler
+Open `http://localhost:3000`, log in with a real registered phone number (OTP), watch the log panel.
 
-**Windows:**
-- Download from: https://github.com/protocolbuffers/protobuf/releases
-- Extract and add to PATH
+## How it talks to Anora
 
-**macOS:**
-```bash
-brew install protobuf
-```
+All traffic goes through the Vite dev server on port 3000 (only port that needs forwarding):
 
-**Linux:**
-```bash
-sudo apt-get install protobuf-compiler
-```
+| Browser calls | Vite proxies to | Used for |
+|---------------|-----------------|----------|
+| `/grpc/*` | `VITE_GRPC_PROXY_TARGET` (Envoy `:16969`) | gRPC-Web: AddConnection, StreamNotifications, RemoveConnection |
+| `/anora/*` | `VITE_ANORA_PROXY_TARGET` (HTTP gateway `:16767`) | `/set_availability` |
 
-### 3. Install gRPC-Web Protoc Plugin
+Login (`registerWithoutPasswordV4` / `verifyOTPV4`) hits `VITE_GRAPHQL_URL` directly.
 
-Download the plugin from: https://github.com/grpc/grpc-web/releases
+## Env (`.env`, gitignored)
 
-**Windows:**
-```bash
-# Download protoc-gen-grpc-web-1.4.2-windows-x86_64.exe
-# Rename to protoc-gen-grpc-web.exe and add to PATH
-```
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `VITE_GRPC_URL` | `/grpc` | gRPC-Web endpoint (same-origin, proxied) |
+| `VITE_GRPC_PROXY_TARGET` | `http://localhost:16969` | where `/grpc` forwards (Envoy) |
+| `VITE_ANORA_HTTP_BASE` | `/anora` | base for HTTP gateway calls |
+| `VITE_ANORA_PROXY_TARGET` | `http://localhost:16767` | where `/anora` forwards (gateway) |
+| `VITE_ANORA_API_KEY` | `d0n0tr3d33m` | `X-API-KEY` for `/set_availability` (visible in browser) |
+| `VITE_GRAPHQL_URL` | `https://db.vocallabs.ai/v1/graphql` | phone+OTP login |
 
-**macOS:**
-```bash
-brew install grpc-web
-```
+## Identity
 
-**Linux:**
-```bash
-# Download the binary and make it executable
-sudo mv protoc-gen-grpc-web-1.4.2-linux-x86_64 /usr/local/bin/protoc-gen-grpc-web
-sudo chmod +x /usr/local/bin/protoc-gen-grpc-web
-```
+- `connection_id` (gRPC) = `auth.user.id` (Hasura user id)
+- `service_name` (gRPC) = `device_uuid` — UUID persisted in `localStorage`
+- gRPC metadata = `authorization: Bearer <auth_token>` on every call
+- Server returns `unique_id = <user.id>_<device_uuid>`; the stream subscribes with that.
 
-### 4. Generate gRPC-Web Client Code
+## Functionality
 
-```bash
-npm run generate-proto
-```
+- **Login** (`src/Login.jsx`, `src/auth/auth.js`): phone → OTP (CAP.js captcha). On success stores `{ authToken, refreshToken, user.id }`.
+- **Connect** (`src/notifications/useNotification.js`): on login, `AddConnection` then `StreamNotifications`; logs every request/response/error and incoming notification + heartbeat.
+- **Availability toggle** (`src/api/availability.js`): `POST /anora/set_availability?client_id=&device_id=&ready=` with `X-API-KEY`. Logs request/response.
+- **Logout**: `RemoveConnection` + clears session, returns to login.
 
-This will create:
-- `src/proto/notification_pb.js` - Message definitions
-- `src/proto/notification_grpc_web_pb.js` - Service client
-
-## Running the Application
-
-### 1. Start Envoy Proxy (gRPC-Web requires HTTP/1.1 to gRPC bridge)
-
-```bash
-docker run -d -v "$(pwd)/envoy.yaml:/etc/envoy/envoy.yaml:ro" \
-  --network="host" envoyproxy/envoy:v1.22-latest
-```
-
-**Windows PowerShell:**
-```powershell
-docker run -d -v "${PWD}/envoy.yaml:/etc/envoy/envoy.yaml:ro" --network="host" envoyproxy/envoy:v1.22-latest
-```
-
-### 2. Make sure your gRPC server is running on localhost:50051
-
-### 3. Start the React app
-
-```bash
-npm start
-```
-
-The app will open at `http://localhost:3000`
-
-## What the App Does
-
-When the app starts, it automatically:
-
-1. **Connects to the gRPC server** via Envoy proxy (localhost:8080)
-2. **Calls AddConnection** with:
-   ```json
-   {
-     "connection_id": "client_457",
-     "service_name": "web_browser1"
-   }
-   ```
-3. **Starts streaming notifications** using the returned unique connection ID (e.g., `client_457_web_browser1`)
-4. **Logs all received messages**:
-   - Notifications
-   - Heartbeats
-   - Connection status
-   - Errors
-
-## UI Features
-
-- **"Hello" heading** as requested
-- **Connection status indicator** (green for connected, red for errors)
-- **Live notification logs** with timestamps and color-coded message types:
-  - 🔵 Blue: Heartbeats
-  - 🟢 Green: Notifications
-  - 🔴 Red: Errors
-  - 🟠 Orange: Requests
-  - 🟣 Purple: Responses
-
-## Architecture
+## Key files
 
 ```
-React App (localhost:3000)
-    ↓ gRPC-Web (HTTP/1.1)
-Envoy Proxy (localhost:8080)
-    ↓ gRPC (HTTP/2)
-Your gRPC Server (localhost:50051)
+src/App.jsx                      login gate + dashboard (status, toggle, log panel)
+src/Login.jsx                    phone/OTP form
+src/auth/auth.js                 OTP login, device id, session
+src/notifications/useNotification.js  gRPC connect/stream + logging
+src/api/availability.js          /set_availability call
+src/config.js                    env config
+vite.config.js                   /grpc + /anora dev proxies
 ```
-
-## Troubleshooting
-
-### "Cannot connect to server"
-- Ensure your gRPC server is running on port 50051
-- Check that Envoy proxy is running: `docker ps`
-- Verify Envoy logs: `docker logs <container-id>`
-
-### "Module not found: proto files"
-- Run `npm run generate-proto` to generate the client code
-
-### CORS errors
-- Envoy configuration includes CORS headers, but verify your server allows gRPC-Web
-
-## Sending Test Notifications
-
-From your gRPC server or another client, send notifications to `client_457_web_browser1` and they will appear in the browser console and UI.
-
-## Development
-
-- Edit `src/App.js` to modify the UI or connection logic
-- Edit `notification.proto` and re-run `npm run generate-proto` if you change the protocol
-- Logs appear both in the UI and browser console
