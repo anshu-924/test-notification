@@ -19,6 +19,85 @@
       box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
   </style>
+  <!-- CAP.js captcha widget + pre-warm — must load before the login screen mounts.
+       Ported verbatim from vocallabsui (app/layout.tsx). Exposes window.capInstance.getToken(). -->
+  <script src="https://cdn.jsdelivr.net/npm/@cap.js/widget"></script>
+  <script>
+    (function () {
+      var capSolver = null;
+      var initPromise = null;
+
+      function ensureInit() {
+        if (capSolver) return Promise.resolve();
+        if (initPromise) return initPromise;
+        initPromise = new Promise(function (resolve) {
+          function doInit() {
+            capSolver = new Cap({ apiEndpoint: 'https://cap.subspace.money/1e344b4141/' });
+            resolve();
+          }
+          if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', doInit);
+          } else {
+            doInit();
+          }
+        });
+        return initPromise;
+      }
+
+      var cachedTokenPromise = null;
+
+      function solveOne() {
+        cachedTokenPromise = new Promise(function (resolve, reject) {
+          ensureInit().then(function () {
+            var widget = capSolver.widget;
+            var timeout = setTimeout(function () {
+              widget.removeEventListener('solve', onSolve);
+              widget.removeEventListener('error', onError);
+              cachedTokenPromise = null;
+              reject(new Error('CAP.js solve timed out'));
+            }, 30000);
+
+            function onSolve(e) {
+              clearTimeout(timeout);
+              widget.removeEventListener('solve', onSolve);
+              widget.removeEventListener('error', onError);
+              resolve(e.detail.token || capSolver.token);
+            }
+            function onError() {
+              clearTimeout(timeout);
+              widget.removeEventListener('solve', onSolve);
+              widget.removeEventListener('error', onError);
+              cachedTokenPromise = null;
+              reject(new Error('CAP.js solve error'));
+            }
+
+            widget.addEventListener('solve', onSolve);
+            widget.addEventListener('error', onError);
+            capSolver.solve();
+          }).catch(function (err) {
+            cachedTokenPromise = null;
+            reject(err);
+          });
+        });
+        return cachedTokenPromise;
+      }
+
+      ensureInit().then(function () { solveOne(); });
+
+      window.capInstance = {
+        getToken: function () {
+          var promise = cachedTokenPromise || solveOne();
+          return promise.then(function (token) {
+            capSolver.reset();
+            cachedTokenPromise = null;
+            setTimeout(function () { solveOne(); }, 100);
+            return token;
+          });
+        },
+        ready: true
+      };
+    })();
+  </script>
 </head>
 <body>
   <div id="root"></div>
